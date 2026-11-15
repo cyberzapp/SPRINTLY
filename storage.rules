@@ -1,0 +1,56 @@
+rules_version = '2';
+
+// ============================================================================
+//  Sprintly — Firebase Storage Security Rules
+// ----------------------------------------------------------------------------
+//  Principles:
+//   1. Profile pictures: readable by all signed-in users, writable only by the owner.
+//   2. Workspace logos: readable by workspace members, writable only by workspace admins.
+//   3. Project files: readable by workspace members, writable only by workspace members.
+//   4. Strictly enforce file types, max file sizes (25MB for files, 5MB for images).
+// ============================================================================
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function isMember(ws) {
+      return signedIn() && firestore.exists(/databases/(default)/documents/workspaces/$(ws)/members/$(uid()));
+    }
+
+    function isAdmin(ws) {
+      return isMember(ws) && firestore.get(/databases/(default)/documents/workspaces/$(ws)/members/$(uid())).data.role in ['owner', 'admin'];
+    }
+
+    // -------------------------------------------------- User Profile Avatars
+    match /users/{userId}/avatar/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn() && uid() == userId
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // ------------------------------------------------------- Workspace Logos
+    match /workspaces/{ws}/logo/{fileName} {
+      allow read: if signedIn();
+      allow write: if isAdmin(ws)
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // -------------------------------------------------- Project & Task Files
+    match /workspaces/{ws}/projects/{projectId}/files/{fileId}/{fileName} {
+      allow read: if isMember(ws);
+      allow create: if isMember(ws)
+        && request.resource.size <= 25 * 1024 * 1024;
+      allow delete: if isMember(ws);
+    }
+  }
+}
